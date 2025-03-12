@@ -1,8 +1,7 @@
 // addMemory.ts
 import { AddMemoryRequest } from "../../interfaces";
-import { getTable } from "./../../utils/tableManager";
-// @ts-ignore
-import embeddings from "@themaximalist/embeddings.js";
+import { getTable } from "../../utils/tableManager";
+import { EmbeddingModel, FlagEmbedding } from "fastembed";
 
 /** 
  * chunkText: splits text by whitespace into ~300 "words" per chunk 
@@ -28,40 +27,51 @@ function chunkText(text: string, maxTokens = 300): string[] {
 /**
  * addMemory:
  * 1) chunk memory into 300-word segments
- * 2) embed each chunk using embeddings.js 
- * 3) store in table named after brainID 
+ * 2) embed each chunk using fastembed
+ * 3) store in table named after brainID
  */
 export async function addMemory(request: AddMemoryRequest): Promise<boolean> {
   try {
-
     const { memory, brainID } = request;
-  
+
     // chunk the memory
     const chunks = chunkText(memory, 300);
 
     // get or create the table 
     const table = await getTable(brainID);
 
-    // embed each chunk, store in LanceDB
-    const rows = [];
-    for (let i = 0; i < chunks.length; i++) {
-        const chunkText = chunks[i];
-        // default local embeddings are 384-dim
-        // to use openai: embeddings(chunkText, { service: "openai", model: "text-embedding-ada-002" })
-        const vector = await embeddings(chunkText);
+    // initialize fastembed model (BGEBaseEN is just an example)
+    const embeddingModel = await FlagEmbedding.init({
+      model: EmbeddingModel.BGEBaseEN
+    });
+
+    // embed each chunk in batches 
+    const rows: Array<{ chunk: string; vector: number[]; chunkIndex: number }> = [];
+    let chunkIndex = 0;
+
+    // embeddingModel.passageEmbed returns an async iterator over batch results
+    const embeddingIterator = embeddingModel.passageEmbed(chunks, 10); 
+    // The second argument (10) is an optional batch size – adjust as desired
+
+    for await (const batch of embeddingIterator) {
+      // batch is an array of Float32 embeddings, each embedding is number[]
+      for (const vector of batch) {
         rows.push({
-        chunk: chunkText,
-        vector,
-        chunkIndex: i
+          chunk: chunks[chunkIndex],
+          vector, 
+          chunkIndex
         });
+        chunkIndex++;
+      }
     }
 
+    // store embedded rows in your LanceDB table
     await table.add(rows);
-    // optionally create an index if we want vector search:
+
+    // optionally create an index if you want vector search:
     // await table.createIndex("vector");
 
     return true;
-    
   } catch (error) {
     console.error("Error adding memory:", error);
     return false;

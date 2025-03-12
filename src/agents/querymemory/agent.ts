@@ -1,7 +1,7 @@
-// @ts-ignore
-import embeddings from "@themaximalist/embeddings.js";
+// queryMemoryAgent.ts
 import { QueryMemoryRequest, QueryMemoryResponse, QueryMemoryResult } from "../../interfaces";
 import { getTable } from "../../utils/tableManager"; // your LanceDB manager
+import { EmbeddingModel, FlagEmbedding } from "fastembed";
 
 /**
  * queryMemoryAgent:
@@ -16,23 +16,26 @@ export async function runQueryMemoryAgent(request: QueryMemoryRequest): Promise<
   // 1) Open or create the LanceDB table for this brain
   const table = await getTable(brainID);
 
-  // 2) Embed the query with Embeddings.js (defaults to local 384-dim)
-  // If you want e.g. openai embeddings: embeddings(query, { service: "openai", model: "text-embedding-ada-002" })
-  const queryVector = await embeddings(query);
+  // 2) Initialize fastembed + embed the query
+  // For short user prompts, queryEmbed is recommended
+  const embeddingModel = await FlagEmbedding.init({
+    model: EmbeddingModel.BGEBaseEN
+  });
+  const queryVector = await embeddingModel.queryEmbed(query);
 
   // 3) Search the table, limiting results to topK
   // The .score is typically a distance => lower = more similar
   const results = await table.search(queryVector).limit(n_results).toArray();
 
-  // 4) Build the array of { memory, similarity }
-  // We'll do a simple transformation: similarity = 1 / (1 + distance)
+  // 4) Build the array of { memory, distance }
+  // (Optional) If you prefer a similarity measure, you could do e.g. similarity = 1 / (1 + distance)
   const memories: QueryMemoryResult[] = results.map((r: any) => {
-    const distance: number = r.score || 0;
+    const distance: number = r.score ?? 0;
     return {
-      memory: (r.chunk as string) || "", // or r.text, r.content, depending on how you stored it
-      distance,
+      memory: (r.chunk as string) || "",
+      distance
     };
   });
-  
-  return { memories };  
+
+  return { memories };
 }

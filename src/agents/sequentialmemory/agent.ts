@@ -2,16 +2,24 @@ import { z } from "zod";
 import { promptLlmWithJsonSchema, promptLlm } from "../../utils/promptLlm";
 import { getTable } from "../../utils/tableManager"; // your LanceDB table manager
 import { SequentialMemoryAgentRequest } from "../../interfaces";
-// @ts-ignore
-import embeddings from "@themaximalist/embeddings.js";
+import { EmbeddingModel, FlagEmbedding } from "fastembed"; // <-- Use fastembed
 
 // We'll define a decision schema for whether to continue searching
 const decisionSchema = z.object({
   search_again: z.boolean(),
-  additional_prompt: z.string()
+  additional_prompt: z.string(),
 });
 
-
+// Optional: Keep a single instance of the model to avoid re-initializing it
+let cachedEmbeddingModel: FlagEmbedding | null = null;
+async function getEmbeddingModel(): Promise<FlagEmbedding> {
+  if (!cachedEmbeddingModel) {
+    cachedEmbeddingModel = await FlagEmbedding.init({
+      model: EmbeddingModel.BGEBaseEN,
+    });
+  }
+  return cachedEmbeddingModel;
+}
 
 export async function runSequentialMemoryAgent(
   request: SequentialMemoryAgentRequest
@@ -24,43 +32,54 @@ export async function runSequentialMemoryAgent(
     model,
   } = request;
 
-  // The recursive helper
+  // A recursive helper function
   async function sequentialSearch(
     currentPrompt: string,
     recursionCount: number
   ): Promise<string> {
     // If recursion limit is reached, just finalize
     if (recursionCount >= max_recursion) {
-      return await promptLlm(currentPrompt, model);
+      return promptLlm(currentPrompt, model);
     }
 
     // 1) Generate memory queries using structured output
     const querySchema = z.object({
       queries: z.array(z.string()),
     });
+
     const queryPrompt = `
 Based on the following user prompt, generate ${n_queries} distinct queries
 that best retrieve relevant memory from the local memory store.
 Output strictly valid JSON with "queries" as an array of query strings.
 User prompt: "${currentPrompt}"
     `;
-    const queryResult = await promptLlmWithJsonSchema(model, queryPrompt, querySchema);
+    const queryResult = await promptLlmWithJsonSchema(
+      model,
+      queryPrompt,
+      querySchema
+    );
     const queries: string[] = queryResult.queries;
 
     // 2) For each query, embed & search LanceDB
-    let aggregatedResults: string[] = [];
+    const aggregatedResults: string[] = [];
     const table = await getTable(brainID);
+
+    // Get or initialize the fastembed model once here
+    const embeddingModel = await getEmbeddingModel();
 
     for (let i = 0; i < queries.length; i++) {
       const q = queries[i];
-      // embed with Embeddings.js (default local, 384-dim)
-      const queryVector = await embeddings(q);
-      // do a vector search in the table
+
+      // Use queryEmbed for short query text
+      const queryVector = await embeddingModel.queryEmbed(q);
+
+      // Vector search in the LanceDB table
       const results = await table.search(queryVector).limit(5).toArray();
-      // accumulate the memory text with citations
-      results.forEach((row: any, idx: any) => {
+
+      // Accumulate the memory text with citations
+      results.forEach((row: any, idx: number) => {
         const chunkText = row.chunk || "";
-        // We'll label them e.g. [i.1], [i.2], ...
+        // We'll label them e.g. [1.1], [1.2], ...
         aggregatedResults.push(`[${i + 1}.${idx + 1}] ${chunkText}`);
       });
     }
@@ -98,18 +117,22 @@ Return strictly valid JSON using this schema:
 If more memory is needed, set "search_again"=true and provide an updated query or user prompt
 in "additional_prompt". Otherwise set "search_again"=false.
     `;
-    const decisionResult = await promptLlmWithJsonSchema(model, decisionPrompt, decisionSchema);
+    const decisionResult = await promptLlmWithJsonSchema(
+      model,
+      decisionPrompt,
+      decisionSchema
+    );
 
     if (decisionResult.search_again) {
       // Recurse with the new prompt
       const newPrompt = decisionResult.additional_prompt;
       return sequentialSearch(newPrompt, recursionCount + 1);
     } else {
-      // done
+      // We are done
       return candidateAnswer;
     }
   }
 
   // Initiate recursion
-  return await sequentialSearch(prompt, 0);
+  return sequentialSearch(prompt, 0);
 }

@@ -1,9 +1,9 @@
+// askMemoryAgent.ts
 import { AskMemoryAgentRequest } from "../../interfaces";
 import { z } from "zod";
 import { promptLlmWithJsonSchema, promptLlm } from "../../utils/promptLlm";
-import { getTable } from "../../utils/tableManager"; // the file where you have initTableManager & getTable
-// @ts-ignore
-import embeddings from "@themaximalist/embeddings.js";
+import { getTable } from "../../utils/tableManager";
+import { EmbeddingModel, FlagEmbedding } from "fastembed";
 
 /**
  * askMemoryAgent:
@@ -24,34 +24,39 @@ Based on the following user prompt, generate ${n_queries} distinct queries
 that best retrieve relevant memories from the local memory store.
 Output strictly valid JSON with a key "queries" that contains an array of query strings.
 User prompt: "${prompt}"
-  `;
+`;
 
   const queryResult = await promptLlmWithJsonSchema(model, queryPrompt, querySchema);
   const queries: string[] = queryResult.queries;
 
   // 2) For each query, embed, then search LanceDB in the given brain table
-  const table = await getTable(brainID); 
-  let aggregatedResults: string[] = [];
+  const table = await getTable(brainID);
+
+  // Initialize fastembed (doing this once per request)
+  const embeddingModel = await FlagEmbedding.init({
+    model: EmbeddingModel.BGEBaseEN
+  });
+
+  const aggregatedResults: string[] = [];
 
   for (let i = 0; i < queries.length; i++) {
     const q = queries[i];
-    // embed the query
-    const queryVector = await embeddings(q);
-    // do a vector search
+    // embed the query (single string)
+    const queryVector = await embeddingModel.queryEmbed(q);
+
+    // do a vector search in LanceDB
     const results = await table.search(queryVector).limit(5).toArray();
-    // Each result row includes (chunk, vector, [any other fields]) plus .score
-    // We'll store them for final answer
-    results.forEach((row: any, idx: any) => {
+
+    // Each result row includes (chunk, vector, etc.) plus .score
+    results.forEach((row: any, idx: number) => {
       const text = row.chunk || "";
-      // We'll do a citation bracket like [i. idxInResults]
-      // e.g. [1.1], [1.2], [2.1], etc.
+      // We'll do a citation bracket like [i.idxInResults], e.g. [1.1], [1.2], [2.1], etc.
       aggregatedResults.push(`[${i + 1}.${idx + 1}] ${text}`);
     });
   }
 
   // 3) Build a final prompt for the final answer
-  // similar to the internet approach: each chunk is cited with a bracket
-  let memoryResultsText = aggregatedResults.join("\n");
+  const memoryResultsText = aggregatedResults.join("\n");
 
   const finalPrompt = `
 You are an expert memory retrieval agent. The user asked:
@@ -63,8 +68,7 @@ ${memoryResultsText}
 Now please provide a comprehensive, fact-based answer to the user's prompt. 
 `;
 
-  // 4) Generate final answer using plain text prompt function
-  const finalAnswer: string = await promptLlm(finalPrompt, model);
-
+  // 4) Generate final answer using your LLM function
+  const finalAnswer = await promptLlm(finalPrompt, model);
   return finalAnswer;
 }
