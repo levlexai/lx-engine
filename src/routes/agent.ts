@@ -81,4 +81,20 @@ router.post("/", async (req: Request, res: Response, next: NextFunction): Promis
     }
 });
 
+Object.entries(agentMap).forEach(([agentName, agentFn]) => {
+    // The agent name is something like "runInternetAgent"
+    // We create a POST route at /agent/runInternetAgent
+    router.post(`/${agentName}`, async (req: Request, res: Response) => {
+      try {
+        // Pass the request body to the agent function
+        const output = await agentFn(req.body);
+        res.json({ output });
+      } catch (error) {
+        console.error(`Error in /agent/${agentName}:`, error);
+        res.status(500).json({ error: String(error) });
+      }
+    });
+  });
+  
+
 export default router;
