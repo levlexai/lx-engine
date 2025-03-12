@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "outDir": "build",
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "types": [
+      "node",
+      "jest"
+    ]
+  },
+  "include": [
+    "process.env.d.ts",
+    "./**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
