@@ -6,6 +6,8 @@ This repository is a **work in progress**—we appreciate your feedback!
 
 Learn more about Levlex and our work at our [website](https://levlex.xyz/).
 
+Note about commit history: most of the development was done at [this repo](https://github.com/levlexai/levlex-engine), but then the project scaffolding was redone and finalized here. So this is the correct repo.
+
 ---
 
 ## Table of Contents
